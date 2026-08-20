@@ -8,6 +8,8 @@ const cw = process.env.CHATWOOT_URL;
 const token = process.env.CHATWOOT_API_TOKEN;
 const account = process.env.CHATWOOT_ACCOUNT_ID || '1';
 const inbox = Number(process.env.CHATWOOT_INBOX_ID || '3');
+const metaToken = process.env.META_ACCESS_TOKEN;
+const phoneNumberId = process.env.META_PHONE_NUMBER_ID;
 
 const json = (res, code, body) => { res.writeHead(code, {'content-type':'application/json; charset=utf-8'}); res.end(JSON.stringify(body)); };
 const body = req => new Promise((resolve,reject)=>{let s='';req.on('data',c=>s+=c);req.on('end',()=>{try{resolve(JSON.parse(s||'{}'))}catch(e){reject(e)}})});
@@ -37,7 +39,22 @@ async function notify(a) {
   const content = `Здравствуйте, ${a.client_name}! Вы записаны в салон красоты Qflow.\n\nУслуга: ${a.service}\nМастер: ${a.master_name}\nДата и время: ${when}\n\nЖдём вас! Для переноса записи ответьте на это сообщение.`;
   r = await cwFetch(`/conversations/${conv.id}/messages`, {method:'POST',body:JSON.stringify({content,message_type:'outgoing',private:false})});
   const message = await r.json();
-  return { conversation_id: conv.id, message_id: message.id, status: message.status, error: message.content_attributes?.external_error };
+  let buttons;
+  if (metaToken && phoneNumberId) {
+    const br = await fetch(`https://graph.facebook.com/v26.0/${phoneNumberId}/messages`, {
+      method: 'POST', headers: { authorization: `Bearer ${metaToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ messaging_product: 'whatsapp', to: phone.replace('+',''), type: 'interactive', interactive: {
+        type: 'button', body: { text: `Подтвердите запись: ${a.service}, ${when}` },
+        action: { buttons: [
+          { type:'reply', reply:{ id:`confirm_${a.id}`, title:'Да' } },
+          { type:'reply', reply:{ id:`cancel_${a.id}`, title:'Нет' } },
+          { type:'reply', reply:{ id:`call_${a.id}`, title:'Позвонить' } }
+        ] }
+      }})
+    });
+    const bj = await br.json(); buttons = { status: br.status, message_id: bj.messages?.[0]?.id, error: bj.error?.message };
+  }
+  return { conversation_id: conv.id, message_id: message.id, status: message.status, error: message.content_attributes?.external_error, buttons };
 }
 
 const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Qflow — Записи салона</title><style>
