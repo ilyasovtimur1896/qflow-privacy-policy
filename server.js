@@ -1,20 +1,13 @@
 import http from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { Pool } from 'pg';
 
 const port = Number(process.env.PORT || 3000);
 const privacyHtml = await readFile(new URL('./privacy-policy.html', import.meta.url), 'utf8');
-const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: process.env.DATABASE_URL?.includes('railway.internal') ? false : { rejectUnauthorized: false } });
+const appointments = [];
 const cw = process.env.CHATWOOT_URL;
 const token = process.env.CHATWOOT_API_TOKEN;
 const account = process.env.CHATWOOT_ACCOUNT_ID || '1';
 const inbox = Number(process.env.CHATWOOT_INBOX_ID || '3');
-
-await pool.query(`CREATE TABLE IF NOT EXISTS qflow_appointments (
-  id BIGSERIAL PRIMARY KEY, client_name TEXT NOT NULL, phone TEXT NOT NULL,
-  service TEXT NOT NULL, master_name TEXT NOT NULL, starts_at TIMESTAMPTZ NOT NULL,
-  status TEXT NOT NULL DEFAULT 'confirmed', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-)`);
 
 const json = (res, code, body) => { res.writeHead(code, {'content-type':'application/json; charset=utf-8'}); res.end(JSON.stringify(body)); };
 const body = req => new Promise((resolve,reject)=>{let s='';req.on('data',c=>s+=c);req.on('end',()=>{try{resolve(JSON.parse(s||'{}'))}catch(e){reject(e)}})});
@@ -60,7 +53,7 @@ http.createServer(async (req,res)=>{try{
   if(req.method==='GET'&&u.pathname==='/privacy-policy'){res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(privacyHtml)}
   if(req.method==='GET'&&u.pathname==='/'){res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(html)}
   if(req.method==='GET'&&u.pathname==='/health')return json(res,200,{ok:true});
-  if(req.method==='GET'&&u.pathname==='/api/appointments'){const from=u.searchParams.get('from'),to=u.searchParams.get('to');const q=await pool.query('SELECT * FROM qflow_appointments WHERE starts_at >= $1::date AND starts_at < ($2::date + interval \'1 day\') ORDER BY starts_at',[from,to]);return json(res,200,q.rows)}
-  if(req.method==='POST'&&u.pathname==='/api/appointments'){const a=await body(req);if(!a.client_name||!a.phone||!a.service||!a.master_name||!a.starts_at)return json(res,422,{error:'Заполните все поля'});const q=await pool.query('INSERT INTO qflow_appointments(client_name,phone,service,master_name,starts_at) VALUES($1,$2,$3,$4,$5) RETURNING *',[a.client_name,norm(a.phone),a.service,a.master_name,a.starts_at]);let notification;try{notification=await notify(q.rows[0])}catch(e){notification={status:'failed',error:e.message}}return json(res,201,{appointment:q.rows[0],notification})}
+  if(req.method==='GET'&&u.pathname==='/api/appointments'){const from=u.searchParams.get('from'),to=u.searchParams.get('to');return json(res,200,appointments.filter(a=>a.starts_at.slice(0,10)>=from&&a.starts_at.slice(0,10)<=to))}
+  if(req.method==='POST'&&u.pathname==='/api/appointments'){const a=await body(req);if(!a.client_name||!a.phone||!a.service||!a.master_name||!a.starts_at)return json(res,422,{error:'Заполните все поля'});const appointment={id:Date.now(),...a,phone:norm(a.phone),status:'confirmed',created_at:new Date().toISOString()};appointments.push(appointment);let notification;try{notification=await notify(appointment)}catch(e){notification={status:'failed',error:e.message}}return json(res,201,{appointment,notification})}
   json(res,404,{error:'Not found'});
 }catch(e){console.error(e);json(res,500,{error:e.message})}}).listen(port,()=>console.log('booking service on',port));
